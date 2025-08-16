@@ -1,9 +1,16 @@
+[build]
+  functions = "netlify/functions"
+  publish = "."
+
 [functions]
   node_bundler = "esbuild"
   included_files = []
 
-# Opcional: se seu site está em "dist/" ou similar:
-#[build]
-#  publish = "dist"
-#  command = "npm run build"
-
+# Headers de CORS para permitir requisições do GitHub Pages
+[[headers]]
+  for = "/.netlify/functions/*"
+  [headers.values]
+    Access-Control-Allow-Origin = "https://annafrota.github.io"
+    Access-Control-Allow-Headers = "Content-Type"
+    Access-Control-Allow-Methods = "GET, POST, OPTIONS"
+    
