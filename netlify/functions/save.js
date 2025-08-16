@@ -1,90 +1,51 @@
-// Netlify Functions (Node 18+)
-// Recebe POST dos <form>, valida honeypot/consentimento, grava no Supabase
-// e responde com HTML que faz postMessage('form_submitted'|'form_error') ao parent.
-// Compatível com <iframe name="gsheet_iframe"> da landing em https://annafrota.github.io/Treuss-energia/
-
+// Versão simplificada para debug - use temporariamente
 import { createClient } from '@supabase/supabase-js';
 
-// ⚠️ Variáveis definidas no painel da Netlify (Site settings → Environment variables)
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const TABLE = process.env.LEADS_TABLE || 'leads';
-
-// Domínio final permitido para postMessage
 const TARGET_ORIGIN = 'https://annafrota.github.io';
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-  auth: { persistSession: false }
-});
+let supabase;
+try {
+  supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { persistSession: false }
+  });
+} catch (error) {
+  console.error('Erro ao inicializar Supabase:', error);
+}
 
-function htmlOk() {
-  const html = [
-    '<!doctype html><meta charset="utf-8">',
-    '<p>OK</p>',
-    '<script>',
-    `  (function(){ try { window.top.postMessage('form_submitted', '${TARGET_ORIGIN}'); } catch(e) { console.error('PostMessage error:', e); } })();`,
-    '</script>'
-  ].join('');
+function htmlResponse(success, message = '') {
+  const status = success ? 'form_submitted' : 'form_error';
+  const html = `
+    <!doctype html>
+    <html>
+    <head><meta charset="utf-8"><title>${success ? 'Sucesso' : 'Erro'}</title></head>
+    <body>
+      <h1>${success ? 'Sucesso!' : 'Erro'}</h1>
+      <p>${message}</p>
+      <script>
+        console.log('Enviando postMessage:', '${status}');
+        try {
+          window.top.postMessage('${status}', '${TARGET_ORIGIN}');
+        } catch(e) {
+          console.error('Erro no postMessage:', e);
+        }
+      </script>
+    </body>
+    </html>
+  `;
   return html;
-}
-
-function htmlError(msg = 'Erro') {
-  const safe = String(msg).replace(/[<>&"'`]/g, s => ({
-    '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;', '`': '&#96;'
-  }[s]));
-  const html = [
-    '<!doctype html><meta charset="utf-8">',
-    `<p>${safe}</p>`,
-    '<script>',
-    `  (function(){ try { window.top.postMessage('form_error', '${TARGET_ORIGIN}'); } catch(e) { console.error('PostMessage error:', e); } })();`,
-    '</script>'
-  ].join('');
-  return html;
-}
-
-function parseForm(body, contentType) {
-  try {
-    if (!body) {
-      console.log('Body vazio recebido');
-      return {};
-    }
-    
-    console.log('Body raw:', body);
-    console.log('Content-Type:', contentType);
-    
-    // Se for multipart, precisamos de um parser diferente
-    if (contentType.includes('multipart/form-data')) {
-      // Para multipart, vamos usar uma abordagem simples
-      const obj = {};
-      // Este é um parser básico - em produção, use uma biblioteca apropriada
-      return obj;
-    }
-    
-    // Parse URL-encoded
-    const params = new URLSearchParams(body);
-    const obj = {};
-    for (const [k, v] of params.entries()) {
-      obj[k] = v;
-      console.log(`Parsed field: ${k} = ${v}`);
-    }
-    
-    console.log('Dados parseados final:', obj);
-    return obj;
-    
-  } catch (error) {
-    console.error('Erro no parse do formulário:', error);
-    return {};
-  }
-}
-
-function isValidEmail(email) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email || '');
 }
 
 export async function handler(event, context) {
-  console.log('Function called:', event.httpMethod, event.path);
-  
-  // Headers CORS
+  console.log('=== INÍCIO DEBUG NETLIFY FUNCTION ===');
+  console.log('HTTP Method:', event.httpMethod);
+  console.log('Headers:', JSON.stringify(event.headers, null, 2));
+  console.log('Body (raw):', event.body);
+  console.log('Body type:', typeof event.body);
+  console.log('Body length:', event.body ? event.body.length : 0);
+
   const corsHeaders = {
     'Access-Control-Allow-Origin': TARGET_ORIGIN,
     'Access-Control-Allow-Headers': 'Content-Type',
@@ -92,8 +53,9 @@ export async function handler(event, context) {
     'Content-Type': 'text/html; charset=utf-8'
   };
 
-  // Handle OPTIONS (preflight)
+  // Handle OPTIONS
   if (event.httpMethod === 'OPTIONS') {
+    console.log('Respondendo OPTIONS request');
     return {
       statusCode: 200,
       headers: corsHeaders,
@@ -101,136 +63,173 @@ export async function handler(event, context) {
     };
   }
 
+  // Verificar variáveis de ambiente primeiro
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+    console.error('ERRO: Variáveis de ambiente não configuradas');
+    console.log('SUPABASE_URL exists:', !!SUPABASE_URL);
+    console.log('SUPABASE_SERVICE_ROLE_KEY exists:', !!SUPABASE_SERVICE_ROLE_KEY);
+    return {
+      statusCode: 500,
+      headers: corsHeaders,
+      body: htmlResponse(false, 'Configuração do servidor incompleta')
+    };
+  }
+
   if (event.httpMethod !== 'POST') {
+    console.log('Método não permitido:', event.httpMethod);
     return {
       statusCode: 405,
       headers: corsHeaders,
-      body: htmlError('Método não permitido')
+      body: htmlResponse(false, 'Método não permitido')
     };
   }
 
-  // Log para debug
-  console.log('Headers recebidos:', JSON.stringify(event.headers, null, 2));
-  console.log('Body recebido:', event.body);
-
-  const contentType = (event.headers['content-type'] || event.headers['Content-Type'] || '').toLowerCase();
-  console.log('Content-Type recebido:', contentType);
-  
-  // Aceitar tanto form-urlencoded quanto multipart (caso o browser envie)
-  if (!contentType.includes('application/x-www-form-urlencoded') && 
-      !contentType.includes('multipart/form-data')) {
-    console.error('Content-Type inválido:', contentType);
+  // Parse simples dos dados - aceitar qualquer formato
+  let data = {};
+  try {
+    if (event.body) {
+      // Tentar parse como URLSearchParams primeiro
+      const params = new URLSearchParams(event.body);
+      for (const [key, value] of params.entries()) {
+        data[key] = value;
+        console.log(`Campo parseado: ${key} = "${value}"`);
+      }
+    }
+  } catch (parseError) {
+    console.error('Erro no parse:', parseError);
     return {
       statusCode: 400,
       headers: corsHeaders,
-      body: htmlError(`Content-Type inválido: ${contentType}`)
+      body: htmlResponse(false, 'Erro no parse dos dados')
     };
   }
 
-  const data = parseForm(event.body || '', contentType);
-  console.log('Dados parseados:', data);
+  console.log('Dados finais parseados:', JSON.stringify(data, null, 2));
 
-  // Honeypot
+  // Validação mínima - só verificar se tem dados
+  if (Object.keys(data).length === 0) {
+    console.log('Nenhum dado recebido');
+    return {
+      statusCode: 400,
+      headers: corsHeaders,
+      body: htmlResponse(false, 'Nenhum dado recebido')
+    };
+  }
+
+  // Honeypot check
   if (data.company && data.company.trim() !== '') {
-    console.log('Honeypot detectado, ignorando requisição');
+    console.log('Honeypot detectado, retornando sucesso falso');
     return {
       statusCode: 200,
       headers: corsHeaders,
-      body: htmlOk()
+      body: htmlResponse(true, 'Processado (honeypot)')
     };
   }
 
-  // Validação
+  // Extrair campos principais
   const name = (data.name || '').trim();
   const email = (data.email || '').trim();
-
-  if (!name || !email) {
-    return {
-      statusCode: 400,
-      headers: corsHeaders,
-      body: htmlError('Nome e e-mail são obrigatórios.')
-    };
-  }
-  if (!isValidEmail(email)) {
-    return {
-      statusCode: 400,
-      headers: corsHeaders,
-      body: htmlError('E-mail inválido.')
-    };
-  }
-
-  // Consentimento
-  const consent = (data.consent || '').toLowerCase();
-  const consentOk = ['on', 'true', '1', 'yes'].includes(consent);
-  if (!consentOk) {
-    return {
-      statusCode: 400,
-      headers: corsHeaders,
-      body: htmlError('É necessário aceitar a Política de Privacidade.')
-    };
-  }
-
-  // Campos adicionais
   const phone = (data.phone || '').trim();
   const quantity = (data.quantity || '').trim();
-  const contribution = (data.contrib || '').trim();
-  const formType = (data.type || '').trim() || inferFormType(data);
+  const contrib = (data.contrib || '').trim();
+  const type = (data.type || '').trim();
+  const consent = data.consent;
 
+  console.log('Campos extraídos:');
+  console.log('- name:', name);
+  console.log('- email:', email);
+  console.log('- phone:', phone);
+  console.log('- quantity:', quantity);
+  console.log('- contrib:', contrib);
+  console.log('- type:', type);
+  console.log('- consent:', consent);
+
+  // Validação básica
+  if (!name) {
+    console.log('Nome não fornecido');
+    return {
+      statusCode: 400,
+      headers: corsHeaders,
+      body: htmlResponse(false, 'Nome é obrigatório')
+    };
+  }
+
+  if (!email) {
+    console.log('Email não fornecido');
+    return {
+      statusCode: 400,
+      headers: corsHeaders,
+      body: htmlResponse(false, 'Email é obrigatório')
+    };
+  }
+
+  // Validação de email básica
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    console.log('Email inválido:', email);
+    return {
+      statusCode: 400,
+      headers: corsHeaders,
+      body: htmlResponse(false, 'Email inválido')
+    };
+  }
+
+  // Verificar consentimento
+  const consentOk = ['on', 'true', '1', 'yes'].includes((consent || '').toLowerCase());
+  if (!consentOk) {
+    console.log('Consentimento não fornecido ou inválido:', consent);
+    return {
+      statusCode: 400,
+      headers: corsHeaders,
+      body: htmlResponse(false, 'É necessário aceitar a Política de Privacidade')
+    };
+  }
+
+  // Tentar salvar no Supabase
   try {
-    // Verificar se as variáveis de ambiente estão configuradas
-    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-      console.error('Variáveis de ambiente do Supabase não configuradas');
-      return {
-        statusCode: 500,
-        headers: corsHeaders,
-        body: htmlError('Configuração do servidor incompleta.')
-      };
-    }
-
+    console.log('Tentando salvar no Supabase...');
+    
     const payload = {
       created_at: new Date().toISOString(),
-      name,
-      email,
+      name: name,
+      email: email,
       phone: phone || null,
       quantity: quantity || null,
-      contribution: contribution || null,
-      form_type: formType,
+      contribution: contrib || null,
+      form_type: type || 'unknown',
       consent: true,
       user_agent: event.headers['user-agent'] || '',
       ip: event.headers['x-nf-client-connection-ip'] || event.headers['x-forwarded-for'] || '',
       raw_data: JSON.stringify(data)
     };
 
-    console.log('Tentando inserir no Supabase:', payload);
+    console.log('Payload para Supabase:', JSON.stringify(payload, null, 2));
 
-    const { error } = await supabase.from(TABLE).insert(payload);
+    const { data: result, error } = await supabase.from(TABLE).insert(payload);
+    
     if (error) {
-      console.error('Supabase insert error:', error);
+      console.error('Erro do Supabase:', error);
       return {
         statusCode: 500,
         headers: corsHeaders,
-        body: htmlError('Falha ao salvar. Tente novamente.')
+        body: htmlResponse(false, `Erro no banco de dados: ${error.message}`)
       };
     }
 
-    console.log('Dados inseridos com sucesso');
+    console.log('Dados salvos com sucesso:', result);
+    console.log('=== FIM DEBUG - SUCESSO ===');
+    
     return {
       statusCode: 200,
       headers: corsHeaders,
-      body: htmlOk()
+      body: htmlResponse(true, 'Dados salvos com sucesso')
     };
-  } catch (err) {
-    console.error('Unexpected error:', err);
+
+  } catch (error) {
+    console.error('Erro inesperado:', error);
     return {
       statusCode: 500,
       headers: corsHeaders,
-      body: htmlError('Erro inesperado. Tente novamente.')
+      body: htmlResponse(false, `Erro inesperado: ${error.message}`)
     };
   }
-}
-
-function inferFormType(obj) {
-  if (obj.type === 'purchase' || (obj.quantity && String(obj.quantity).trim() !== '')) return 'purchase';
-  if (obj.type === 'download') return 'download';
-  return 'unknown';
 }
