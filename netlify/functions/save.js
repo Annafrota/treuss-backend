@@ -18,28 +18,26 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 });
 
 function htmlOk() {
-  const html = [
+  return [
     '<!doctype html><meta charset="utf-8">',
     '<p>OK</p>',
     '<script>',
     `  (function(){ try { window.top.postMessage('form_submitted', '${TARGET_ORIGIN}'); } catch(e) {} })();`,
     '</script>'
   ].join('');
-  return html;
 }
 
 function htmlError(msg = 'Erro') {
   const safe = String(msg).replace(/[<>&"'`]/g, s => ({
     '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;', '`': '&#96;'
   }[s]));
-  const html = [
+  return [
     '<!doctype html><meta charset="utf-8">',
     `<p>${safe}</p>`,
     '<script>',
     `  (function(){ try { window.top.postMessage('form_error', '${TARGET_ORIGIN}'); } catch(e) {} })();`,
     '</script>'
   ].join('');
-  return html;
 }
 
 function parseForm(body) {
@@ -55,76 +53,55 @@ function isValidEmail(email) {
 
 export async function handler(event) {
   if (event.httpMethod !== 'POST') {
-    return {
-      statusCode: 405,
-      headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      body: htmlError('Método não permitido')
-    };
+    return { statusCode: 405, headers: { 'Content-Type': 'text/html; charset=utf-8' }, body: htmlError('Método não permitido') };
   }
 
   const contentType = event.headers['content-type'] || event.headers['Content-Type'] || '';
   if (!contentType.includes('application/x-www-form-urlencoded')) {
-    return {
-      statusCode: 400,
-      headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      body: htmlError('Content-Type inválido')
-    };
+    return { statusCode: 400, headers: { 'Content-Type': 'text/html; charset=utf-8' }, body: htmlError('Content-Type inválido') };
   }
 
   const data = parseForm(event.body || '');
 
   // Honeypot
   if (data.company && data.company.trim() !== '') {
-    return {
-      statusCode: 200,
-      headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      body: htmlOk()
-    };
+    return { statusCode: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' }, body: htmlOk() };
   }
+
+  // Campos aceitando variantes (download vs compra)
+  const name = (data.name || data['d-name'] || '').trim();
+  const email = (data.email || data['d-email'] || '').trim();
 
   // Validação
-  const name = (data.name || '').trim();
-  const email = (data.email || '').trim();
-
   if (!name || !email) {
-    return {
-      statusCode: 400,
-      headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      body: htmlError('Nome e e-mail são obrigatórios.')
-    };
+    return { statusCode: 400, headers: { 'Content-Type': 'text/html; charset=utf-8' }, body: htmlError('Nome e e-mail são obrigatórios.') };
   }
   if (!isValidEmail(email)) {
-    return {
-      statusCode: 400,
-      headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      body: htmlError('E-mail inválido.')
-    };
+    return { statusCode: 400, headers: { 'Content-Type': 'text/html; charset=utf-8' }, body: htmlError('E-mail inválido.') };
   }
 
-  // Consentimento
-  const consent = (data.consent || '').toLowerCase();
-  const consentOk = ['on', 'true', '1', 'yes'].includes(consent);
+  // Consentimento: aceita qualquer checkbox marcado
+  const consent = data['consent'] || data['terms-compra'] || data['terms-download'] || '';
+  const consentOk = ['on', 'true', '1', 'yes'].includes(consent.toLowerCase());
   if (!consentOk) {
-    return {
-      statusCode: 400,
-      headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      body: htmlError('É necessário aceitar a Política de Privacidade.')
-    };
+    return { statusCode: 400, headers: { 'Content-Type': 'text/html; charset=utf-8' }, body: htmlError('É necessário aceitar a Política de Privacidade.') };
   }
 
   // Campos adicionais
   const phone = (data.phone || '').trim();
   const quantity = (data.quantity || '').trim();
-  const formType = (data.formType || '').trim() || inferFormType(data);
+  const contrib = (data['d-contrib'] || '').trim();
+  const formType = (data.type || '').trim(); // "purchase" ou "download"
 
   try {
     const payload = {
       created_at: new Date().toISOString(),
+      type: formType,
       name,
       email,
       phone,
       quantity,
-      form_type: formType,
+      contrib,
       consent: true,
       user_agent: event.headers['user-agent'] || '',
       ip: event.headers['x-nf-client-connection-ip'] || event.headers['x-forwarded-for'] || '',
@@ -134,29 +111,12 @@ export async function handler(event) {
     const { error } = await supabase.from(TABLE).insert(payload);
     if (error) {
       console.error('Supabase insert error:', error);
-      return {
-        statusCode: 500,
-        headers: { 'Content-Type': 'text/html; charset=utf-8' },
-        body: htmlError('Falha ao salvar. Tente novamente.')
-      };
+      return { statusCode: 500, headers: { 'Content-Type': 'text/html; charset=utf-8' }, body: htmlError('Falha ao salvar. Tente novamente.') };
     }
 
-    return {
-      statusCode: 200,
-      headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      body: htmlOk()
-    };
+    return { statusCode: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' }, body: htmlOk() };
   } catch (err) {
     console.error('Unexpected error:', err);
-    return {
-      statusCode: 500,
-      headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      body: htmlError('Erro inesperado. Tente novamente.')
-    };
+    return { statusCode: 500, headers: { 'Content-Type': 'text/html; charset=utf-8' }, body: htmlError('Erro inesperado. Tente novamente.') };
   }
-}
-
-function inferFormType(obj) {
-  if (obj.quantity && String(obj.quantity).trim() !== '') return 'buy';
-  return 'download';
 }
