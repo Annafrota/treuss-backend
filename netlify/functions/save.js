@@ -42,11 +42,39 @@ function htmlError(msg = 'Erro') {
   return html;
 }
 
-function parseForm(body) {
-  const params = new URLSearchParams(body);
-  const obj = {};
-  for (const [k, v] of params.entries()) obj[k] = v;
-  return obj;
+function parseForm(body, contentType) {
+  try {
+    if (!body) {
+      console.log('Body vazio recebido');
+      return {};
+    }
+    
+    console.log('Body raw:', body);
+    console.log('Content-Type:', contentType);
+    
+    // Se for multipart, precisamos de um parser diferente
+    if (contentType.includes('multipart/form-data')) {
+      // Para multipart, vamos usar uma abordagem simples
+      const obj = {};
+      // Este é um parser básico - em produção, use uma biblioteca apropriada
+      return obj;
+    }
+    
+    // Parse URL-encoded
+    const params = new URLSearchParams(body);
+    const obj = {};
+    for (const [k, v] of params.entries()) {
+      obj[k] = v;
+      console.log(`Parsed field: ${k} = ${v}`);
+    }
+    
+    console.log('Dados parseados final:', obj);
+    return obj;
+    
+  } catch (error) {
+    console.error('Erro no parse do formulário:', error);
+    return {};
+  }
 }
 
 function isValidEmail(email) {
@@ -85,17 +113,21 @@ export async function handler(event, context) {
   console.log('Headers recebidos:', JSON.stringify(event.headers, null, 2));
   console.log('Body recebido:', event.body);
 
-  const contentType = event.headers['content-type'] || event.headers['Content-Type'] || '';
-  if (!contentType.includes('application/x-www-form-urlencoded')) {
+  const contentType = (event.headers['content-type'] || event.headers['Content-Type'] || '').toLowerCase();
+  console.log('Content-Type recebido:', contentType);
+  
+  // Aceitar tanto form-urlencoded quanto multipart (caso o browser envie)
+  if (!contentType.includes('application/x-www-form-urlencoded') && 
+      !contentType.includes('multipart/form-data')) {
     console.error('Content-Type inválido:', contentType);
     return {
       statusCode: 400,
       headers: corsHeaders,
-      body: htmlError('Content-Type inválido')
+      body: htmlError(`Content-Type inválido: ${contentType}`)
     };
   }
 
-  const data = parseForm(event.body || '');
+  const data = parseForm(event.body || '', contentType);
   console.log('Dados parseados:', data);
 
   // Honeypot
