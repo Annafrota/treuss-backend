@@ -1,0 +1,9 @@
+[functions]
+  node_bundler = "esbuild"
+  included_files = []
+
+# Opcional: se seu site está em "dist/" ou similar:
+#[build]
+#  publish = "dist"
+#  command = "npm run build"
+
