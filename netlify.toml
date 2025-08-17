@@ -1,16 +1,23 @@
 [build]
   functions = "netlify/functions"
   publish = "."
+  command = "npm run build"
 
 [functions]
   node_bundler = "esbuild"
-  included_files = []
+  external_node_modules = ["@supabase/supabase-js"]
 
 # Headers de CORS para permitir requisições do GitHub Pages
 [[headers]]
   for = "/.netlify/functions/*"
   [headers.values]
     Access-Control-Allow-Origin = "https://annafrota.github.io"
-    Access-Control-Allow-Headers = "Content-Type"
+    Access-Control-Allow-Headers = "Content-Type, Origin, Accept"
     Access-Control-Allow-Methods = "GET, POST, OPTIONS"
-    
+    Access-Control-Max-Age = "86400"
+
+# Redirects para SPA (opcional)
+[[redirects]]
+  from = "/.netlify/functions/save/*"
+  to = "/.netlify/functions/save"
+  status = 200
