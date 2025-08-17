@@ -1,4 +1,4 @@
-// Versão simplificada para debug - use temporariamente
+// netlify/functions/save.js
 import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -6,230 +6,244 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const TABLE = process.env.LEADS_TABLE || 'leads';
 const TARGET_ORIGIN = 'https://annafrota.github.io';
 
+// Headers CORS padrão
+const corsHeaders = {
+  'Access-Control-Allow-Origin': TARGET_ORIGIN,
+  'Access-Control-Allow-Headers': 'Content-Type, Origin, Accept',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Max-Age': '86400',
+  'Vary': 'Origin'
+};
+
 let supabase;
 try {
-  supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-    auth: { persistSession: false }
-  });
+  if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
+    supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+      auth: { persistSession: false }
+    });
+  }
 } catch (error) {
   console.error('Erro ao inicializar Supabase:', error);
 }
 
 function htmlResponse(success, message = '') {
   const status = success ? 'form_submitted' : 'form_error';
-  const html = `
-    <!doctype html>
-    <html>
-    <head><meta charset="utf-8"><title>${success ? 'Sucesso' : 'Erro'}</title></head>
-    <body>
-      <h1>${success ? 'Sucesso!' : 'Erro'}</h1>
-      <p>${message}</p>
-      <script>
-        console.log('Enviando postMessage:', '${status}');
-        try {
-          window.top.postMessage('${status}', '${TARGET_ORIGIN}');
-        } catch(e) {
-          console.error('Erro no postMessage:', e);
-        }
-      </script>
-    </body>
-    </html>
-  `;
+  const html = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>${success ? 'Sucesso' : 'Erro'}</title>
+  <meta name="robots" content="noindex">
+</head>
+<body>
+  <h1>${success ? 'Sucesso!' : 'Erro'}</h1>
+  <p>${message}</p>
+  <script>
+    console.log('Enviando postMessage:', '${status}');
+    try {
+      if (window.top && window.top !== window) {
+        window.top.postMessage('${status}', '${TARGET_ORIGIN}');
+      } else {
+        console.log('Não está em iframe, redirecionando...');
+        setTimeout(() => window.location.href = '${TARGET_ORIGIN}#offer', 2000);
+      }
+    } catch(e) {
+      console.error('Erro no postMessage:', e);
+      setTimeout(() => window.location.href = '${TARGET_ORIGIN}#offer', 2000);
+    }
+  </script>
+</body>
+</html>`;
   return html;
 }
 
-export async function handler(event, context) {
-  console.log('=== INÍCIO DEBUG NETLIFY FUNCTION ===');
-  console.log('HTTP Method:', event.httpMethod);
-  console.log('Headers:', JSON.stringify(event.headers, null, 2));
-  console.log('Body (raw):', event.body);
-  console.log('Body type:', typeof event.body);
-  console.log('Body length:', event.body ? event.body.length : 0);
-
-  const corsHeaders = {
-    'Access-Control-Allow-Origin': TARGET_ORIGIN,
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+export const handler = async (event, context) => {
+  console.log('=== NETLIFY FUNCTION START ===');
+  console.log('Method:', event.httpMethod);
+  console.log('Origin:', event.headers.origin);
+  console.log('User-Agent:', event.headers['user-agent']);
+  
+  // Sempre retornar headers CORS
+  const responseHeaders = {
+    ...corsHeaders,
     'Content-Type': 'text/html; charset=utf-8'
   };
 
-  // Handle OPTIONS
+  // Handle OPTIONS preflight
   if (event.httpMethod === 'OPTIONS') {
-    console.log('Respondendo OPTIONS request');
+    console.log('Handling OPTIONS preflight');
     return {
       statusCode: 200,
-      headers: corsHeaders,
+      headers: responseHeaders,
       body: ''
     };
   }
 
-  // Verificar variáveis de ambiente primeiro
+  // Handle GET (endpoint info)
+  if (event.httpMethod === 'GET') {
+    console.log('Handling GET request');
+    return {
+      statusCode: 200,
+      headers: responseHeaders,
+      body: htmlResponse(true, 'Netlify Function está funcionando! Use POST para enviar dados.')
+    };
+  }
+
+  // Só aceitar POST para dados reais
+  if (event.httpMethod !== 'POST') {
+    console.log('Method not allowed:', event.httpMethod);
+    return {
+      statusCode: 405,
+      headers: responseHeaders,
+      body: htmlResponse(false, 'Método não permitido. Use POST.')
+    };
+  }
+
+  // Verificar configuração do ambiente
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
     console.error('ERRO: Variáveis de ambiente não configuradas');
     console.log('SUPABASE_URL exists:', !!SUPABASE_URL);
     console.log('SUPABASE_SERVICE_ROLE_KEY exists:', !!SUPABASE_SERVICE_ROLE_KEY);
     return {
       statusCode: 500,
-      headers: corsHeaders,
+      headers: responseHeaders,
       body: htmlResponse(false, 'Configuração do servidor incompleta')
     };
   }
 
-  if (event.httpMethod !== 'POST') {
-    console.log('Método não permitido:', event.httpMethod);
-    return {
-      statusCode: 405,
-      headers: corsHeaders,
-      body: htmlResponse(false, 'Método não permitido')
-    };
-  }
-
-  // Parse simples dos dados - aceitar qualquer formato
-  let data = {};
+  // Parse dos dados do formulário
+  let formData = {};
+  
   try {
     if (event.body) {
-      // Tentar parse como URLSearchParams primeiro
+      console.log('Raw body:', event.body.substring(0, 200) + '...');
+      
+      // Parse como URLSearchParams (dados de formulário)
       const params = new URLSearchParams(event.body);
       for (const [key, value] of params.entries()) {
-        data[key] = value;
-        console.log(`Campo parseado: ${key} = "${value}"`);
+        formData[key] = value;
+        console.log(`${key}: ${value}`);
       }
     }
   } catch (parseError) {
-    console.error('Erro no parse:', parseError);
+    console.error('Erro no parse dos dados:', parseError);
     return {
       statusCode: 400,
-      headers: corsHeaders,
-      body: htmlResponse(false, 'Erro no parse dos dados')
+      headers: responseHeaders,
+      body: htmlResponse(false, 'Formato de dados inválido')
     };
   }
 
-  console.log('Dados finais parseados:', JSON.stringify(data, null, 2));
+  console.log('Dados parseados:', Object.keys(formData));
 
-  // Validação mínima - só verificar se tem dados
-  if (Object.keys(data).length === 0) {
-    console.log('Nenhum dado recebido');
-    return {
-      statusCode: 400,
-      headers: corsHeaders,
-      body: htmlResponse(false, 'Nenhum dado recebido')
-    };
-  }
-
-  // Honeypot check
-  if (data.company && data.company.trim() !== '') {
-    console.log('Honeypot detectado, retornando sucesso falso');
+  // Verificação honeypot
+  if (formData.company && formData.company.trim() !== '') {
+    console.log('Bot detectado via honeypot');
     return {
       statusCode: 200,
-      headers: corsHeaders,
-      body: htmlResponse(true, 'Processado (honeypot)')
+      headers: responseHeaders,
+      body: htmlResponse(true, 'Processado')
     };
   }
 
-  // Extrair campos principais
-  const name = (data.name || '').trim();
-  const email = (data.email || '').trim();
-  const phone = (data.phone || '').trim();
-  const quantity = (data.quantity || '').trim();
-  const contrib = (data.contrib || '').trim();
-  const type = (data.type || '').trim();
-  const consent = data.consent;
+  // Extrair campos (suportar ambos os formulários)
+  const name = (formData.name || formData['d-name'] || '').trim();
+  const email = (formData.email || formData['d-email'] || '').trim();
+  const phone = (formData.phone || '').trim();
+  const quantity = (formData.quantity || '').trim();
+  const contribution = (formData['d-contrib'] || formData.contrib || '').trim();
+  const formType = (formData.type || 'unknown').trim();
+  
+  // Verificar consentimento (diferentes nomes de campos)
+  const consentFields = ['terms-compra', 'terms-download', 'consent', 'terms'];
+  const hasConsent = consentFields.some(field => {
+    const value = formData[field];
+    return value && ['on', 'true', '1', 'yes'].includes(value.toLowerCase());
+  });
 
   console.log('Campos extraídos:');
   console.log('- name:', name);
   console.log('- email:', email);
-  console.log('- phone:', phone);
-  console.log('- quantity:', quantity);
-  console.log('- contrib:', contrib);
-  console.log('- type:', type);
-  console.log('- consent:', consent);
+  console.log('- formType:', formType);
+  console.log('- hasConsent:', hasConsent);
 
-  // Validação básica
-  if (!name) {
-    console.log('Nome não fornecido');
+  // Validações
+  if (!name || name.length < 2) {
     return {
       statusCode: 400,
-      headers: corsHeaders,
-      body: htmlResponse(false, 'Nome é obrigatório')
+      headers: responseHeaders,
+      body: htmlResponse(false, 'Nome é obrigatório (mínimo 2 caracteres)')
     };
   }
 
-  if (!email) {
-    console.log('Email não fornecido');
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return {
       statusCode: 400,
-      headers: corsHeaders,
-      body: htmlResponse(false, 'Email é obrigatório')
+      headers: responseHeaders,
+      body: htmlResponse(false, 'Email válido é obrigatório')
     };
   }
 
-  // Validação de email básica
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    console.log('Email inválido:', email);
+  if (!hasConsent) {
     return {
       statusCode: 400,
-      headers: corsHeaders,
-      body: htmlResponse(false, 'Email inválido')
-    };
-  }
-
-  // Verificar consentimento
-  const consentOk = ['on', 'true', '1', 'yes'].includes((consent || '').toLowerCase());
-  if (!consentOk) {
-    console.log('Consentimento não fornecido ou inválido:', consent);
-    return {
-      statusCode: 400,
-      headers: corsHeaders,
+      headers: responseHeaders,
       body: htmlResponse(false, 'É necessário aceitar a Política de Privacidade')
     };
   }
 
-  // Tentar salvar no Supabase
+  // Salvar no Supabase
   try {
-    console.log('Tentando salvar no Supabase...');
+    console.log('Salvando no Supabase...');
     
-    const payload = {
+    const leadData = {
       created_at: new Date().toISOString(),
       name: name,
       email: email,
       phone: phone || null,
-      quantity: quantity || null,
-      contribution: contrib || null,
-      form_type: type || 'unknown',
+      quantity: quantity ? parseInt(quantity) : null,
+      contribution: contribution ? parseFloat(contribution) : null,
+      form_type: formType,
       consent: true,
       user_agent: event.headers['user-agent'] || '',
-      ip: event.headers['x-nf-client-connection-ip'] || event.headers['x-forwarded-for'] || '',
-      raw_data: JSON.stringify(data)
+      ip_address: event.headers['x-nf-client-connection-ip'] || 
+                  event.headers['x-forwarded-for'] || 
+                  event.headers['client-ip'] || 
+                  'unknown',
+      raw_form_data: JSON.stringify(formData)
     };
 
-    console.log('Payload para Supabase:', JSON.stringify(payload, null, 2));
+    console.log('Dados para inserção:', leadData);
 
-    const { data: result, error } = await supabase.from(TABLE).insert(payload);
+    const { data, error } = await supabase
+      .from(TABLE)
+      .insert([leadData])
+      .select();
     
     if (error) {
       console.error('Erro do Supabase:', error);
       return {
         statusCode: 500,
-        headers: corsHeaders,
-        body: htmlResponse(false, `Erro no banco de dados: ${error.message}`)
+        headers: responseHeaders,
+        body: htmlResponse(false, `Erro no banco: ${error.message}`)
       };
     }
 
-    console.log('Dados salvos com sucesso:', result);
-    console.log('=== FIM DEBUG - SUCESSO ===');
+    console.log('Dados salvos com sucesso:', data);
+    console.log('=== FUNCTION END SUCCESS ===');
     
     return {
       statusCode: 200,
-      headers: corsHeaders,
-      body: htmlResponse(true, 'Dados salvos com sucesso')
+      headers: responseHeaders,
+      body: htmlResponse(true, 'Dados salvos com sucesso!')
     };
 
   } catch (error) {
     console.error('Erro inesperado:', error);
     return {
       statusCode: 500,
-      headers: corsHeaders,
-      body: htmlResponse(false, `Erro inesperado: ${error.message}`)
+      headers: responseHeaders,
+      body: htmlResponse(false, `Erro interno: ${error.message}`)
     };
   }
-}
+};
