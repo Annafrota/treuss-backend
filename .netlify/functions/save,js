@@ -10,9 +10,8 @@ const TARGET_ORIGIN = 'https://annafrota.github.io';
 const corsHeaders = {
   'Access-Control-Allow-Origin': TARGET_ORIGIN,
   'Access-Control-Allow-Headers': 'Content-Type, Origin, Accept',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Max-Age': '86400',
-  'Vary': 'Origin'
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Max-Age': '86400'
 };
 
 let supabase;
