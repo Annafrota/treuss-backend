@@ -6,7 +6,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const TABLE = process.env.LEADS_TABLE || 'leads';
 const TARGET_ORIGIN = 'https://annafrota.github.io';
 
-// Headers CORS padrão
+// Headers CORS padrão 
 const corsHeaders = {
   'Access-Control-Allow-Origin': TARGET_ORIGIN,
   'Access-Control-Allow-Headers': 'Content-Type, Origin, Accept',
