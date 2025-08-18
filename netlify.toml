@@ -18,6 +18,8 @@
 
 # Redirects para SPA (opcional)
 [[redirects]]
-  from = "/.netlify/functions/save/*"
-  to = "/.netlify/functions/save"
+  from = "/.netlify/functions/save/"
+  to = "/.netlify/functions/save.js"
   status = 200
+  force = true
+  
